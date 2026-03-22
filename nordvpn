@@ -25,7 +25,7 @@ set -euo pipefail
 NORDVPN_API="https://api.nordvpn.com/v1"
 NORDVPN_DATA="${HOME}/.nordvpn"
 OVPN_DIR="${NORDVPN_DATA}/ovpn"
-HELPER="${NORDVPN_DATA}/nordvpn-helper"
+HELPER="${NORDVPN_HELPER:-${NORDVPN_DATA}/nordvpn-helper}"
 PID_FILE="/tmp/nordvpn-openvpn.pid"
 LOG_FILE="/tmp/nordvpn-openvpn.log"
 AUTH_FILE="/tmp/.nordvpn-auth-$$"
@@ -610,18 +610,21 @@ main() {
     done
 
     local cmd="${args[0]:-help}"
-    local rest=("${args[@]:1}")
+    local rest=()
+    if (( ${#args[@]} > 1 )); then
+        rest=("${args[@]:1}")
+    fi
 
     case "$cmd" in
-        status|s)          cmd_status "${rest[@]}" ;;
-        connect|c)         cmd_connect "${rest[@]}" ;;
-        disconnect|d)      cmd_disconnect "${rest[@]}" ;;
-        rotate|r)          cmd_rotate "${rest[@]}" ;;
-        countries)         cmd_countries "${rest[@]}" ;;
-        cities)            cmd_cities "${rest[@]}" ;;
-        ip)                cmd_ip "${rest[@]}" ;;
-        update-configs)    cmd_update_configs "${rest[@]}" ;;
-        fix|repair)        cmd_fix "${rest[@]}" ;;
+        status|s)          cmd_status "${rest[@]+"${rest[@]}"}" ;;
+        connect|c)         cmd_connect "${rest[@]+"${rest[@]}"}" ;;
+        disconnect|d)      cmd_disconnect "${rest[@]+"${rest[@]}"}" ;;
+        rotate|r)          cmd_rotate "${rest[@]+"${rest[@]}"}" ;;
+        countries)         cmd_countries "${rest[@]+"${rest[@]}"}" ;;
+        cities)            cmd_cities "${rest[@]+"${rest[@]}"}" ;;
+        ip)                cmd_ip "${rest[@]+"${rest[@]}"}" ;;
+        update-configs)    cmd_update_configs "${rest[@]+"${rest[@]}"}" ;;
+        fix|repair)        cmd_fix "${rest[@]+"${rest[@]}"}" ;;
         help|-h|--help)    cmd_help ;;
         *)                 _err "Unknown command: $cmd"; cmd_help; exit 1 ;;
     esac
