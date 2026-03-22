@@ -209,10 +209,10 @@ setup_credentials() {
 verify() {
     _step "Verifying installation..."
 
-    command -v nordvpn &>/dev/null && _ok "nordvpn command available" || _warn "nordvpn not in PATH (try: which nordvpn)"
-    [[ -f "$HELPER_PATH" ]] && _ok "nordvpn-helper installed" || _warn "nordvpn-helper not found at $HELPER_PATH"
-    [[ -f "$SUDOERS_FILE" ]] && _ok "Sudoers entry installed" || _warn "Sudoers entry missing"
-    [[ -d "${OVPN_DIR}/ovpn_udp" ]] && _ok "OpenVPN configs present" || _warn "No configs at $OVPN_DIR"
+    if command -v nordvpn &>/dev/null; then _ok "nordvpn command available"; else _warn "nordvpn not in PATH (try: which nordvpn)"; fi
+    if [[ -f "$HELPER_PATH" ]]; then _ok "nordvpn-helper installed"; else _warn "nordvpn-helper not found at $HELPER_PATH"; fi
+    if [[ -f "$SUDOERS_FILE" ]]; then _ok "Sudoers entry installed"; else _warn "Sudoers entry missing"; fi
+    if [[ -d "${OVPN_DIR}/ovpn_udp" ]]; then _ok "OpenVPN configs present"; else _warn "No configs at $OVPN_DIR"; fi
 
     if security find-generic-password -a "$KEYCHAIN_ACCOUNT" -s "$KEYCHAIN_SERVICE" &>/dev/null; then
         _ok "Keychain credentials present"

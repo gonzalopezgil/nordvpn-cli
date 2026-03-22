@@ -376,8 +376,8 @@ cmd_connect() {
     if [[ -n "$city_arg" ]]; then
         local city_info
         city_info=$(_resolve_city "$country_code" "$city_arg")
-        local city_id city_resolved
-        IFS='|' read -r city_id city_resolved <<< "$city_info"
+        local city_resolved
+        IFS='|' read -r _ city_resolved <<< "$city_info"
         city_filter="$city_resolved"
         _log "Finding best OpenVPN server in $city_resolved, $country_name ($country_code)..."
     else
@@ -597,12 +597,16 @@ cmd_proxy() {
 
     local json_out=$JSON_OUTPUT
 
+    # Pass credentials via env vars (safe against shell injection from special chars in passwords)
+    export _NV_USER="$user"
+    export _NV_PASS="$pass"
+
     if [[ $json_out -eq 1 ]]; then
         echo "$servers" | python3 -c "
-import json, sys, urllib.parse
+import json, sys, os, urllib.parse
 data = json.load(sys.stdin)
-user = '${user}'
-pw = urllib.parse.quote('${pass}', safe='')
+user = os.environ['_NV_USER']
+pw = urllib.parse.quote(os.environ['_NV_PASS'], safe='')
 result = []
 for s in data:
     hostname = s['hostname']
@@ -620,12 +624,12 @@ print(json.dumps(result, indent=2))
 "
     elif [[ $show_urls -eq 1 ]]; then
         echo "$servers" | python3 -c "
-import json, sys, urllib.parse
+import json, sys, os, urllib.parse
 data = json.load(sys.stdin)
-user = '${user}'
-pw = urllib.parse.quote('${pass}', safe='')
+user = os.environ['_NV_USER']
+pw = urllib.parse.quote(os.environ['_NV_PASS'], safe='')
 for s in data:
-    print(f\"https://{user}:{pw}@{s['hostname']}:89\")
+    print(f'https://{user}:{pw}@{s[\"hostname\"]}:89')
 "
     else
         echo "$servers" | python3 -c "
@@ -642,6 +646,8 @@ for s in data:
     print(f'{hostname}:89  {cc}/{city}  load:{load}%')
 "
     fi
+
+    unset _NV_USER _NV_PASS
 }
 
 cmd_help() {

@@ -41,7 +41,7 @@ case "$CMD" in
             local_pid=$(cat "$PID_FILE")
             kill "$local_pid" 2>/dev/null || true
             # Wait up to 10s for graceful shutdown
-            for i in $(seq 1 10); do
+            for _ in $(seq 1 10); do
                 kill -0 "$local_pid" 2>/dev/null || break
                 sleep 1
             done

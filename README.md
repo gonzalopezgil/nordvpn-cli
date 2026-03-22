@@ -84,6 +84,7 @@ The installer will:
 | `disconnect` | Disconnect VPN | `nordvpn disconnect` |
 | `rotate [COUNTRY] [CITY]` | Disconnect + reconnect (new server) | `nordvpn rotate US` |
 | `status [--json]` | Show VPN status + public IP | `nordvpn status --json` |
+| `proxy [-n N] [-c COUNTRY]` | Get HTTPS proxy URLs (port 89) | `nordvpn proxy -n 5` |
 | `ip [--json]` | Show current public IP + location | `nordvpn ip` |
 | `countries` | List all available countries | `nordvpn countries` |
 | `cities [COUNTRY]` | List cities in a country | `nordvpn cities US` |
@@ -123,6 +124,42 @@ if nordvpn status --json | jq -e '.connected' > /dev/null; then
   echo "VPN is up"
 fi
 ```
+
+### Parallel proxies (no VPN tunnel needed)
+
+NordVPN servers expose HTTPS proxies on port 89. Use `nordvpn proxy` to get proxy URLs for parallel scraping — each proxy has a unique IP, no VPN tunnel required.
+
+```bash
+# List available proxies
+nordvpn proxy -n 5
+# es141.nordvpn.com:89  ES/Madrid  load:39%
+# es172.nordvpn.com:89  ES/Madrid  load:27%
+# es203.nordvpn.com:89  ES/Madrid  load:21%
+# ...
+
+# Get full URLs (for curl, Playwright, Puppeteer, etc.)
+nordvpn proxy -n 3 --urls
+# https://user:pass@es141.nordvpn.com:89
+# https://user:pass@es172.nordvpn.com:89
+# https://user:pass@es203.nordvpn.com:89
+
+# Filter by country
+nordvpn proxy -c US -n 3
+
+# JSON output for scripting
+nordvpn proxy -n 2 --json
+# [{"server":"es141.nordvpn.com","proxy":"https://...","city":"Madrid","country":"ES","load":39}, ...]
+
+# Use with curl
+PROXY=$(nordvpn proxy --urls)
+curl --proxy "$PROXY" --proxy-insecure https://httpbin.org/ip
+
+# Use with Playwright (Node.js)
+const proxy = execSync('nordvpn proxy --urls').toString().trim();
+const browser = await chromium.launch({ proxy: { server: proxy } });
+```
+
+> **VPN tunnel vs proxy:** `connect`/`rotate` route all system traffic through a VPN tunnel (OpenVPN). `proxy` gives you per-request proxy URLs that work independently — you can run 5+ parallel scrapers with different IPs without touching your system routes.
 
 ---
 
