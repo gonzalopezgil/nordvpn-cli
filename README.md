@@ -1,12 +1,13 @@
 # nordvpn-cli
 
-> **NordVPN CLI for macOS and Linux — because the official apps don't support scripting.**
+> **NordVPN CLI for macOS, Linux & Windows (WSL2) — because NordVPN forgot to ship one.**
 
 [![macOS](https://img.shields.io/badge/macOS-12%2B-black?logo=apple&logoColor=white)](https://www.apple.com/macos/)
 [![Linux](https://img.shields.io/badge/Linux-any-FCC624?logo=linux&logoColor=white)](https://www.linux.org/)
+[![Windows](https://img.shields.io/badge/Windows-WSL2-0078D6?logo=windows&logoColor=white)](https://learn.microsoft.com/en-us/windows/wsl/)
 [![Bash](https://img.shields.io/badge/Bash-5%2B-4EAA25?logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![ShellCheck](https://github.com/gonzalopezgil/nordvpn-cli/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/gonzalopezgil/nordvpn-cli/actions/workflows/shellcheck.yml)
+[![CI](https://github.com/gonzalopezgil/nordvpn-cli/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/gonzalopezgil/nordvpn-cli/actions/workflows/shellcheck.yml)
 
 Connect, disconnect, and rotate NordVPN servers from the terminal — with JSON output, country/city filtering, and auto-rotation built for scraping workflows. Works on **macOS and Linux**.
 
@@ -237,11 +238,25 @@ requests.get(url, proxies={'https': proxy_url})
 
 ## Requirements
 
-- **macOS** 12+ (Apple Silicon + Intel) **or Linux** (any modern distribution)
+- **macOS** 12+ (Apple Silicon + Intel), **Linux** (any modern distro), or **Windows** (via WSL2)
 - **OpenVPN** — installed via Homebrew (macOS) or apt/yum/pacman (Linux)
 - **Python 3** — included with macOS, available in Linux repos
 - **NordVPN subscription** with service credentials (from dashboard)
 - **Sudo access** (needed for route/DNS management)
+
+### Windows (WSL2)
+
+nordvpn-cli works natively inside WSL2 using the Linux version — no additional porting needed.
+
+```bash
+# Inside WSL2 (Ubuntu, Debian, etc.)
+sudo apt install openvpn curl python3
+curl -fsSL https://raw.githubusercontent.com/gonzalopezgil/nordvpn-cli/main/install.sh | bash
+nordvpn setup
+nordvpn connect US
+```
+
+> **Note:** VPN traffic is routed within the WSL2 VM. The Windows host network is not affected. The `proxy` command works from both WSL2 and native Windows (proxies are just HTTPS URLs).
 
 ---
 
