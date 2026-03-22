@@ -46,7 +46,7 @@ case "$CMD" in
                 sleep 1
             done
             # Force kill if still running
-            kill -0 "$local_pid" 2>/dev/null && kill -9 "$local_pid" 2>/dev/null || true
+            if kill -0 "$local_pid" 2>/dev/null; then kill -9 "$local_pid" 2>/dev/null || true; fi
             rm -f "$PID_FILE"
         fi
         ;;
