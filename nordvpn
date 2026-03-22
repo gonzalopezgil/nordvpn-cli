@@ -550,6 +550,100 @@ cmd_fix() {
     cmd_status
 }
 
+# ─── proxy command ────────────────────────────────────────────────────────────
+# Returns HTTPS proxy URLs for use with curl, Playwright, Puppeteer, etc.
+# NordVPN exposes HTTPS proxies on port 89 (technology id=21: HTTP Proxy SSL).
+#
+# Usage:
+#   nordvpn proxy                     # 1 random proxy (default country)
+#   nordvpn proxy --count 5           # 5 proxies from different servers
+#   nordvpn proxy --country US        # proxy in specific country
+#   nordvpn proxy --count 3 --urls    # output as https://user:pass@host:89
+#
+cmd_proxy() {
+    local count=1
+    local country=""
+    local show_urls=0
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --count|-n) count="${2:-1}"; shift 2 ;;
+            --country|-c) country="${2:-}"; shift 2 ;;
+            --urls|-u) show_urls=1; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    # Get credentials
+    local raw
+    raw=$(security find-generic-password -a "$KEYCHAIN_ACCOUNT" -s "$KEYCHAIN_SERVICE" -w 2>/dev/null) || \
+        _die "Credentials not in Keychain."
+    local user="${raw%%:*}"
+    local pass="${raw#*:}"
+
+    # Build API filter (brackets must be URL-encoded for curl)
+    local api_url="${NORDVPN_API}/servers/recommendations?limit=${count}&filters%5Bservers_technologies%5D%5Bid%5D=21"
+
+    if [[ -n "$country" ]]; then
+        local country_info
+        country_info=$(_resolve_country "$country")
+        local country_id
+        IFS='|' read -r country_id _ _ <<< "$country_info"
+        api_url="${api_url}&filters%5Bcountry_id%5D=${country_id}"
+    fi
+
+    local servers
+    servers=$(curl -sf "$api_url" 2>/dev/null) || _die "Failed to fetch proxy servers"
+
+    local json_out=$JSON_OUTPUT
+
+    if [[ $json_out -eq 1 ]]; then
+        echo "$servers" | python3 -c "
+import json, sys, urllib.parse
+data = json.load(sys.stdin)
+user = '${user}'
+pw = urllib.parse.quote('${pass}', safe='')
+result = []
+for s in data:
+    hostname = s['hostname']
+    city = s['locations'][0]['country']['city']['name'] if s.get('locations') else 'Unknown'
+    cc = s['locations'][0]['country']['code'] if s.get('locations') else '??'
+    load = s['load']
+    result.append({
+        'server': hostname,
+        'proxy': f'https://{user}:{pw}@{hostname}:89',
+        'city': city,
+        'country': cc,
+        'load': load,
+    })
+print(json.dumps(result, indent=2))
+"
+    elif [[ $show_urls -eq 1 ]]; then
+        echo "$servers" | python3 -c "
+import json, sys, urllib.parse
+data = json.load(sys.stdin)
+user = '${user}'
+pw = urllib.parse.quote('${pass}', safe='')
+for s in data:
+    print(f\"https://{user}:{pw}@{s['hostname']}:89\")
+"
+    else
+        echo "$servers" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+if not data:
+    print('No proxy servers found', file=sys.stderr)
+    sys.exit(1)
+for s in data:
+    hostname = s['hostname']
+    city = s['locations'][0]['country']['city']['name'] if s.get('locations') else '?'
+    cc = s['locations'][0]['country']['code'] if s.get('locations') else '??'
+    load = s['load']
+    print(f'{hostname}:89  {cc}/{city}  load:{load}%')
+"
+    fi
+}
+
 cmd_help() {
     cat << 'HELP'
 NordVPN CLI for macOS — because NordVPN forgot to ship one.
@@ -565,6 +659,8 @@ Commands:
   cities [COUNTRY]             List available cities in a country
   ip [--json]                  Show current public IP + location
   update-configs               Re-download all .ovpn server configs (~160MB)
+  proxy [-n COUNT] [-c COUNTRY] Get HTTPS proxy URLs (port 89)
+  proxy --urls                 Output full proxy URLs for curl/Playwright
   fix                          Emergency: kill VPN + restore routes
   help                         Show this help
 
@@ -624,6 +720,7 @@ main() {
         cities)            cmd_cities "${rest[@]+"${rest[@]}"}" ;;
         ip)                cmd_ip "${rest[@]+"${rest[@]}"}" ;;
         update-configs)    cmd_update_configs "${rest[@]+"${rest[@]}"}" ;;
+        proxy|p)           cmd_proxy "${rest[@]+"${rest[@]}"}" ;;
         fix|repair)        cmd_fix "${rest[@]+"${rest[@]}"}" ;;
         help|-h|--help)    cmd_help ;;
         *)                 _err "Unknown command: $cmd"; cmd_help; exit 1 ;;
