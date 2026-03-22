@@ -119,7 +119,9 @@ _restore_routes() {
 
     if [[ -z "$orig_gw" ]]; then
         orig_gw=$(/usr/sbin/networksetup -getinfo Wi-Fi 2>/dev/null | awk -F': ' '/^Router:/{print $2}') || true
-        [[ -z "$orig_gw" ]] && orig_gw=$(/usr/sbin/networksetup -getinfo "Ethernet" 2>/dev/null | awk -F': ' '/^Router:/{print $2}') || true
+        if [[ -z "$orig_gw" ]]; then
+            orig_gw=$(/usr/sbin/networksetup -getinfo "Ethernet" 2>/dev/null | awk -F': ' '/^Router:/{print $2}') || true
+        fi
     fi
 
     if [[ -n "$orig_gw" ]]; then
