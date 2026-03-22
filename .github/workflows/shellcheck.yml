@@ -1,4 +1,4 @@
-name: ShellCheck
+name: CI
 
 on:
   push:
@@ -25,3 +25,16 @@ jobs:
 
       - name: Run ShellCheck on install.sh
         run: shellcheck install.sh
+
+  tests:
+    name: CLI Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Make scripts executable
+        run: chmod +x nordvpn nordvpn-helper tests/test_cli.sh
+
+      - name: Run tests
+        run: bash tests/test_cli.sh

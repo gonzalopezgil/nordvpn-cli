@@ -11,84 +11,151 @@
 
 set -euo pipefail
 
-CMD="${1:-}"
-shift || true
-
-OPENVPN_BIN="/opt/homebrew/opt/openvpn/sbin/openvpn"
 PID_FILE="/tmp/nordvpn-openvpn.pid"
 LOG_FILE="/tmp/nordvpn-openvpn.log"
 
-case "$CMD" in
-    openvpn-start)
-        # $1=ovpn_config_path, $2=auth_file_path
-        rm -f "$LOG_FILE"
-        touch "$LOG_FILE"
-        chmod 644 "$LOG_FILE"
-        "$OPENVPN_BIN" \
-            --config "$1" \
-            --auth-user-pass "$2" \
-            --daemon "nordvpn" \
-            --writepid "$PID_FILE" \
-            --log "$LOG_FILE" \
-            --connect-retry 3 \
-            --connect-timeout 30 \
-            --verb 3
-        chmod 644 "$PID_FILE"
-        ;;
+_detect_os() {
+    case "$(uname -s)" in
+        Darwin) echo "macos" ;;
+        Linux)  echo "linux" ;;
+        *) echo "ERROR: Unsupported OS" >&2; exit 1 ;;
+    esac
+}
 
-    openvpn-stop)
-        if [[ -f "$PID_FILE" ]]; then
-            local_pid=$(cat "$PID_FILE")
-            kill "$local_pid" 2>/dev/null || true
-            # Wait up to 10s for graceful shutdown
-            for _ in $(seq 1 10); do
-                kill -0 "$local_pid" 2>/dev/null || break
-                sleep 1
-            done
-            # Force kill if still running
-            if kill -0 "$local_pid" 2>/dev/null; then kill -9 "$local_pid" 2>/dev/null || true; fi
-            rm -f "$PID_FILE"
+_get_openvpn_bin() {
+    local os="$1"
+    if [[ "$os" == "macos" ]]; then
+        echo "/opt/homebrew/opt/openvpn/sbin/openvpn"
+    elif command -v openvpn &>/dev/null; then
+        command -v openvpn
+    else
+        echo "/usr/sbin/openvpn"
+    fi
+}
+
+cmd_openvpn_start() {
+    local os="$1" config="$2" auth_file="$3"
+    local openvpn_bin
+    openvpn_bin=$(_get_openvpn_bin "$os")
+
+    rm -f "$LOG_FILE"
+    touch "$LOG_FILE"
+    chmod 644 "$LOG_FILE"
+
+    "$openvpn_bin" \
+        --config "$config" \
+        --auth-user-pass "$auth_file" \
+        --daemon "nordvpn" \
+        --writepid "$PID_FILE" \
+        --log "$LOG_FILE" \
+        --connect-retry 3 \
+        --connect-timeout 30 \
+        --verb 3
+
+    chmod 644 "$PID_FILE" 2>/dev/null || true
+}
+
+cmd_openvpn_stop() {
+    if [[ -f "$PID_FILE" ]]; then
+        local pid
+        pid=$(cat "$PID_FILE")
+        kill "$pid" 2>/dev/null || true
+        for _ in $(seq 1 10); do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 1
+        done
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -9 "$pid" 2>/dev/null || true
         fi
-        ;;
-
-    openvpn-kill-all)
-        pkill -f "openvpn.*nordvpn" 2>/dev/null || true
         rm -f "$PID_FILE"
-        ;;
+    fi
+}
 
-    check-pid)
-        [[ -f "$PID_FILE" ]] || exit 1
-        kill -0 "$(cat "$PID_FILE")" 2>/dev/null || exit 1
-        cat "$PID_FILE"
-        ;;
+cmd_check_pid() {
+    [[ -f "$PID_FILE" ]] || exit 1
+    local pid
+    pid=$(cat "$PID_FILE")
+    kill -0 "$pid" 2>/dev/null || exit 1
+    echo "$pid"
+}
 
-    set-dns)
-        # $1=network_service, $2=dns1, $3=dns2
+cmd_set_dns() {
+    local os="$1"
+    shift
+    if [[ "$os" == "macos" ]]; then
+        # $1=service, $2=dns1, $3=dns2
         /usr/sbin/networksetup -setdnsservers "$1" "$2" "$3"
         dscacheutil -flushcache 2>/dev/null || true
         killall -HUP mDNSResponder 2>/dev/null || true
-        ;;
+    else
+        # $1=dns1, $2=dns2
+        if [[ ! -f /etc/resolv.conf.nordvpn-backup ]]; then
+            cp /etc/resolv.conf /etc/resolv.conf.nordvpn-backup 2>/dev/null || true
+        fi
+        printf 'nameserver %s\nnameserver %s\n' "$1" "$2" > /etc/resolv.conf
+        systemd-resolve --flush-caches 2>/dev/null || true
+    fi
+}
 
-    clear-dns)
-        # $@=list of service names (Wi-Fi, Ethernet, ...)
+cmd_clear_dns() {
+    local os="$1"
+    shift
+    if [[ "$os" == "macos" ]]; then
         for svc in "$@"; do
             /usr/sbin/networksetup -setdnsservers "$svc" Empty 2>/dev/null || true
         done
         dscacheutil -flushcache 2>/dev/null || true
         killall -HUP mDNSResponder 2>/dev/null || true
-        ;;
+    else
+        if [[ -f /etc/resolv.conf.nordvpn-backup ]]; then
+            cp /etc/resolv.conf.nordvpn-backup /etc/resolv.conf
+            rm -f /etc/resolv.conf.nordvpn-backup
+        fi
+        systemd-resolve --flush-caches 2>/dev/null || true
+    fi
+}
 
-    route-restore)
-        # $1=original_gateway_ip
-        /sbin/route -n delete -net 0.0.0.0/1   2>/dev/null || true
-        /sbin/route -n delete -net 128.0.0.0/1  2>/dev/null || true
-        /sbin/route -n delete -net 10.100.0.0/16 2>/dev/null || true
-        /sbin/route -n delete default            2>/dev/null || true
-        /sbin/route -n add default "$1"          2>/dev/null || true
-        ;;
+cmd_route_restore() {
+    local os="$1" gateway="$2"
+    if [[ "$os" == "macos" ]]; then
+        /sbin/route -n delete -net 0.0.0.0/1    2>/dev/null || true
+        /sbin/route -n delete -net 128.0.0.0/1   2>/dev/null || true
+        /sbin/route -n delete -net 10.100.0.0/16  2>/dev/null || true
+        /sbin/route -n delete default             2>/dev/null || true
+        /sbin/route -n add default "$gateway"     2>/dev/null || true
+    else
+        ip route del 0.0.0.0/1    2>/dev/null || true
+        ip route del 128.0.0.0/1   2>/dev/null || true
+        ip route del 10.100.0.0/16 2>/dev/null || true
+        ip route del default       2>/dev/null || true
+        ip route add default via "$gateway" 2>/dev/null || true
+    fi
+}
 
-    *)
-        echo "nordvpn-helper: unknown command: $CMD" >&2
-        exit 1
-        ;;
-esac
+# ─── Main dispatch ─────────────────────────────────────────────────────────────
+
+main() {
+    local cmd="${1:-}"
+    shift || true
+    local os
+    os=$(_detect_os)
+
+    case "$cmd" in
+        openvpn-start)   cmd_openvpn_start "$os" "$@" ;;
+        openvpn-stop)    cmd_openvpn_stop ;;
+        openvpn-kill-all)
+            pkill -f "openvpn.*nordvpn" 2>/dev/null || true
+            rm -f "$PID_FILE"
+            ;;
+        check-pid)       cmd_check_pid ;;
+        set-dns)         cmd_set_dns "$os" "$@" ;;
+        clear-dns)       cmd_clear_dns "$os" "$@" ;;
+        route-restore)   cmd_route_restore "$os" "$@" ;;
+        *)
+            echo "nordvpn-helper: unknown command: $cmd" >&2
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

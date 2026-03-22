@@ -3,17 +3,36 @@ ovpn/
 *.ovpn
 *.zip
 
-# Auth files — never commit credentials
+# Auth & credential files — never commit secrets
 .nordvpn-auth-*
 auth.txt
 credentials
+~/.nordvpn/credentials
+
+# Temporary files
+*.log
+*.pid
+*.tmp
+*.out
+
+# Test artifacts
+/tests/*.out
+/tmp/
 
 # macOS
 .DS_Store
 .AppleDouble
 .LSOverride
+*.swp
+*.swo
+*~
 
-# Temp files
-*.log
-*.pid
-*.tmp
+# Linux
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
