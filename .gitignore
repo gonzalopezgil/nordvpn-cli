@@ -1,0 +1,19 @@
+# OpenVPN config files — downloaded at install time (thousands of files, ~160MB)
+ovpn/
+*.ovpn
+*.zip
+
+# Auth files — never commit credentials
+.nordvpn-auth-*
+auth.txt
+credentials
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Temp files
+*.log
+*.pid
+*.tmp

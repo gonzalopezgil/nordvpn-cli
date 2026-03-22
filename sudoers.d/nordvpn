@@ -1,0 +1,13 @@
+# /etc/sudoers.d/nordvpn
+#
+# Grants the current user passwordless sudo access to the nordvpn-helper
+# script ONLY. No broader root access is granted.
+#
+# Install with:
+#   sudo cp sudoers.d/nordvpn /etc/sudoers.d/nordvpn
+#   sudo chmod 440 /etc/sudoers.d/nordvpn
+#
+# Replace YOUR_USERNAME below with your macOS username (run: whoami)
+# The install.sh script does this automatically.
+
+YOUR_USERNAME ALL=(root) NOPASSWD: /Users/YOUR_USERNAME/.nordvpn/nordvpn-helper *

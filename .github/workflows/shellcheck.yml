@@ -1,0 +1,27 @@
+name: ShellCheck
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Run ShellCheck on nordvpn
+        run: shellcheck nordvpn
+
+      - name: Run ShellCheck on nordvpn-helper
+        run: shellcheck nordvpn-helper
+
+      - name: Run ShellCheck on install.sh
+        run: shellcheck install.sh

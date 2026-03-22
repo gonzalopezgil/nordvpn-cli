@@ -1,0 +1,630 @@
+#!/usr/bin/env bash
+# nordvpn — NordVPN CLI for macOS (OpenVPN)
+# shellcheck disable=SC2155
+#
+# Fully non-interactive. Credentials stored in macOS Keychain.
+# Privileged ops delegated to nordvpn-helper via sudoers (principle of least privilege).
+#
+# Usage:
+#   nordvpn status              — Show current VPN status + public IP
+#   nordvpn connect [COUNTRY]   — Connect to best server (default: Spain/ES)
+#   nordvpn disconnect          — Disconnect VPN
+#   nordvpn rotate [COUNTRY]    — Disconnect + reconnect to new server
+#   nordvpn countries           — List available countries
+#   nordvpn cities [COUNTRY]    — List available cities in a country
+#   nordvpn ip                  — Show current public IP + location
+#   nordvpn update-configs      — Download latest .ovpn server configs
+#   nordvpn fix                 — Emergency: kill VPN + restore routes
+#   nordvpn help                — Show this help
+
+set -euo pipefail
+
+###############################################################################
+# Configuration
+###############################################################################
+NORDVPN_API="https://api.nordvpn.com/v1"
+NORDVPN_DATA="${HOME}/.nordvpn"
+OVPN_DIR="${NORDVPN_DATA}/ovpn"
+HELPER="${NORDVPN_DATA}/nordvpn-helper"
+PID_FILE="/tmp/nordvpn-openvpn.pid"
+LOG_FILE="/tmp/nordvpn-openvpn.log"
+AUTH_FILE="/tmp/.nordvpn-auth-$$"
+KEYCHAIN_ACCOUNT="nordvpn-service"
+KEYCHAIN_SERVICE="nordvpn-openvpn"
+COUNTRY_CACHE="/tmp/nordvpn-countries.json"
+CACHE_MAX_AGE=86400
+GATEWAY_FILE="/tmp/nordvpn-orig-gateway"
+NORDVPN_DNS1="103.86.96.100"
+NORDVPN_DNS2="103.86.99.100"
+
+# Flags
+QUIET=0
+JSON_OUTPUT=0
+
+# Run privileged helper
+_sudo() { sudo -n "$HELPER" "$@"; }
+
+###############################################################################
+# Logging
+###############################################################################
+_log()  { [[ $QUIET -eq 1 ]] || echo "[nordvpn] $*" >&2; }
+_err()  { echo "[nordvpn] ERROR: $*" >&2; }
+_die()  { _err "$@"; exit 1; }
+
+_cleanup_auth() {
+    rm -f "$AUTH_FILE" 2>/dev/null || true
+}
+trap _cleanup_auth EXIT
+
+###############################################################################
+# Credentials (macOS Keychain)
+###############################################################################
+_get_credentials() {
+    local raw
+    raw=$(security find-generic-password -a "$KEYCHAIN_ACCOUNT" -s "$KEYCHAIN_SERVICE" -w 2>/dev/null) || \
+        _die "Credentials not found in Keychain. Store them with:
+  security add-generic-password -a nordvpn-service -s nordvpn-openvpn -w 'USER:PASS' -U
+  (Get credentials at: https://my.nordaccount.com/dashboard/nordvpn/manual-configuration/)"
+
+    local user pass
+    user="${raw%%:*}"
+    pass="${raw#*:}"
+
+    [[ -n "$user" && -n "$pass" ]] || _die "Invalid credentials in Keychain (expected USER:PASS format)"
+
+    AUTH_FILE="/tmp/.nordvpn-auth-$$"
+    printf '%s\n%s\n' "$user" "$pass" > "$AUTH_FILE"
+    chmod 600 "$AUTH_FILE"
+}
+
+###############################################################################
+# Network helpers
+###############################################################################
+
+# Get public IP and location via ipinfo.io
+_get_public_ip() {
+    local data
+    data=$(curl -sf --max-time 5 "https://ipinfo.io/json" 2>/dev/null) || {
+        echo "unknown|unknown|unknown"
+        return
+    }
+    echo "$data" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+print(f\"{d.get('ip','?')}|{d.get('city','?')}|{d.get('country','?')}\")
+" 2>/dev/null || echo "unknown|unknown|unknown"
+}
+
+# Check if OpenVPN is running (via PID in helper)
+_is_connected() {
+    _sudo check-pid >/dev/null 2>&1
+}
+
+# Save the default gateway before OpenVPN changes it
+_save_default_gateway() {
+    local gw
+    gw=$(/sbin/route -n get default 2>/dev/null | awk '/gateway:/{print $2}') || true
+    if [[ -n "$gw" && "$gw" != "10.100."* ]]; then
+        echo "$gw" > "$GATEWAY_FILE"
+        _log "Saved original gateway: $gw"
+    fi
+}
+
+# Restore default routes + DNS after disconnect
+_restore_routes() {
+    local orig_gw=""
+    if [[ -f "$GATEWAY_FILE" ]]; then
+        orig_gw=$(cat "$GATEWAY_FILE")
+    fi
+
+    if [[ -z "$orig_gw" ]]; then
+        orig_gw=$(/usr/sbin/networksetup -getinfo Wi-Fi 2>/dev/null | awk -F': ' '/^Router:/{print $2}') || true
+        [[ -z "$orig_gw" ]] && orig_gw=$(/usr/sbin/networksetup -getinfo "Ethernet" 2>/dev/null | awk -F': ' '/^Router:/{print $2}') || true
+    fi
+
+    if [[ -n "$orig_gw" ]]; then
+        _log "Restoring default route via $orig_gw..."
+        _sudo route-restore "$orig_gw"
+        _log "Routes restored ✓"
+    else
+        _err "Could not determine original gateway! You may need to run:"
+        _err "  sudo route -n add default <your-router-ip>"
+        _err "  (usually 192.168.0.1 or 192.168.1.1)"
+    fi
+
+    # Restore DNS to automatic
+    _sudo clear-dns Wi-Fi Ethernet
+
+    rm -f "$GATEWAY_FILE"
+}
+
+# Get the active network service name
+_get_active_service() {
+    local service
+    for service in Wi-Fi Ethernet; do
+        if /usr/sbin/networksetup -getinfo "$service" 2>/dev/null | grep -q "^IP address:"; then
+            echo "$service"
+            return
+        fi
+    done
+    echo "Wi-Fi"
+}
+
+# Set DNS to NordVPN's servers
+_set_vpn_dns() {
+    local service
+    service=$(_get_active_service)
+    _log "Setting DNS on $service to NordVPN servers..."
+    _sudo set-dns "$service" "$NORDVPN_DNS1" "$NORDVPN_DNS2"
+}
+
+###############################################################################
+# NordVPN API helpers
+###############################################################################
+
+# Fetch and cache the countries list from NordVPN API
+_get_countries_json() {
+    local now
+    now=$(date +%s)
+
+    if [[ -f "$COUNTRY_CACHE" ]]; then
+        local mtime
+        mtime=$(stat -f %m "$COUNTRY_CACHE" 2>/dev/null || echo 0)
+        if (( now - mtime < CACHE_MAX_AGE )); then
+            cat "$COUNTRY_CACHE"
+            return
+        fi
+    fi
+
+    curl -sf "${NORDVPN_API}/servers/countries" > "$COUNTRY_CACHE" || \
+        _die "Failed to fetch country list from NordVPN API"
+    cat "$COUNTRY_CACHE"
+}
+
+# Resolve country name or 2-letter code → id|code|name
+_resolve_country() {
+    local input="${1:-Spain}"
+    local countries
+    countries=$(_get_countries_json)
+
+    echo "$countries" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+q = '${input}'.strip()
+q_upper = q.upper()
+q_lower = q.lower()
+# Exact code match first
+for c in data:
+    if c['code'].upper() == q_upper:
+        print(f\"{c['id']}|{c['code']}|{c['name']}\")
+        sys.exit(0)
+# Partial name match
+for c in data:
+    if q_lower in c['name'].lower():
+        print(f\"{c['id']}|{c['code']}|{c['name']}\")
+        sys.exit(0)
+sys.exit(1)
+" 2>/dev/null || _die "Country not found: $input"
+}
+
+# Resolve city name within a country → city_id|city_name
+_resolve_city() {
+    local country_code="$1" city_query="$2"
+    local countries
+    countries=$(_get_countries_json)
+
+    echo "$countries" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+code = '${country_code}'.upper()
+query = '${city_query}'.lower()
+for c in data:
+    if c['code'].upper() == code:
+        cities = c.get('cities', [])
+        for ci in cities:
+            if ci['name'].lower() == query:
+                print(f\"{ci['id']}|{ci['name']}\")
+                sys.exit(0)
+        for ci in cities:
+            if query in ci['name'].lower():
+                print(f\"{ci['id']}|{ci['name']}\")
+                sys.exit(0)
+        names = ', '.join(ci['name'] for ci in cities)
+        print(f'ERROR|City not found. Available: {names}', file=sys.stderr)
+        sys.exit(1)
+print('ERROR|Country not found', file=sys.stderr)
+sys.exit(1)
+" 2>/dev/null || _die "City '$city_query' not found in $country_code"
+}
+
+# List cities for a country
+_list_cities() {
+    local country_code="$1"
+    local countries
+    countries=$(_get_countries_json)
+
+    echo "$countries" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+code = '${country_code}'.upper()
+for c in data:
+    if c['code'].upper() == code:
+        cities = c.get('cities', [])
+        if not cities:
+            print('  No cities available')
+        for ci in sorted(cities, key=lambda x: x['name']):
+            print(f\"  {ci['name']}\")
+        sys.exit(0)
+print('Country not found', file=sys.stderr)
+sys.exit(1)
+" 2>/dev/null
+}
+
+# Get recommended server hostname for a country (optionally filtered by city)
+# Outputs: hostname|name|load|city
+_get_best_server() {
+    local country_id="$1"
+    local city_filter="${2:-}"
+
+    local api_limit=20
+    [[ -n "$city_filter" ]] && api_limit=200
+
+    curl -sf "${NORDVPN_API}/servers/recommendations?limit=${api_limit}&filters\[country_id\]=${country_id}&filters\[servers_technologies\]\[identifier\]=openvpn_udp" | \
+        python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+if not data:
+    sys.exit(1)
+city_filter = '${city_filter}'.lower()
+for s in data:
+    city = s['locations'][0]['country']['city']['name'] if s.get('locations') else 'Unknown'
+    if city_filter and city.lower() != city_filter:
+        continue
+    print(f\"{s['hostname']}|{s['name']}|{s['load']}|{city}\")
+    sys.exit(0)
+if city_filter:
+    print(f'No servers found in city: ${city_filter}', file=sys.stderr)
+sys.exit(1)
+" 2>/dev/null || _die "No OpenVPN servers found for country ID $country_id${city_filter:+ (city: $city_filter)}"
+}
+
+###############################################################################
+# Commands
+###############################################################################
+
+cmd_status() {
+    # Parse flags
+    local json_out=$JSON_OUTPUT
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json) json_out=1 ;;
+            *) ;;
+        esac
+        shift
+    done
+
+    local ip_info
+    ip_info=$(_get_public_ip)
+    local ip city country
+    IFS='|' read -r ip city country <<< "$ip_info"
+
+    if _is_connected; then
+        local server_name=""
+        if [[ -f "$LOG_FILE" ]]; then
+            server_name=$(grep -o '[a-z]*[0-9]*\.nordvpn\.com' "$LOG_FILE" 2>/dev/null | tail -1 || true)
+        fi
+        local pid
+        pid=$(_sudo check-pid)
+
+        if [[ $json_out -eq 1 ]]; then
+            python3 -c "
+import json
+print(json.dumps({
+    'connected': True,
+    'ip': '${ip}',
+    'city': '${city}',
+    'country': '${country}',
+    'server': '${server_name}',
+    'pid': ${pid}
+}, indent=2))
+"
+        else
+            echo "VPN Status: Connected"
+            echo "Public IP:  $ip"
+            echo "Location:   $city, $country"
+            [[ -n "$server_name" ]] && echo "Server:     $server_name"
+            echo "PID:        $pid"
+        fi
+    else
+        rm -f "$PID_FILE" 2>/dev/null || true
+
+        if [[ $json_out -eq 1 ]]; then
+            python3 -c "
+import json
+print(json.dumps({
+    'connected': False,
+    'ip': '${ip}',
+    'city': '${city}',
+    'country': '${country}'
+}, indent=2))
+"
+        else
+            echo "VPN Status: Disconnected"
+            echo "Public IP:  $ip"
+            echo "Location:   $city, $country"
+        fi
+    fi
+}
+
+cmd_connect() {
+    local country="${1:-ES}"
+    local city_arg="${2:-}"
+
+    if _is_connected; then
+        _log "Already connected. Use 'nordvpn rotate' to switch servers."
+        cmd_status
+        return 0
+    fi
+
+    local country_info
+    country_info=$(_resolve_country "$country")
+    local country_id country_code country_name
+    IFS='|' read -r country_id country_code country_name <<< "$country_info"
+
+    # Resolve city if provided
+    local city_filter=""
+    if [[ -n "$city_arg" ]]; then
+        local city_info
+        city_info=$(_resolve_city "$country_code" "$city_arg")
+        local city_id city_resolved
+        IFS='|' read -r city_id city_resolved <<< "$city_info"
+        city_filter="$city_resolved"
+        _log "Finding best OpenVPN server in $city_resolved, $country_name ($country_code)..."
+    else
+        _log "Finding best OpenVPN server in $country_name ($country_code)..."
+    fi
+
+    local server_info
+    server_info=$(_get_best_server "$country_id" "$city_filter")
+    local hostname name load city
+    IFS='|' read -r hostname name load city <<< "$server_info"
+
+    _log "Best server: $name ($hostname) — $city — Load: ${load}%"
+
+    local ovpn_file="${OVPN_DIR}/ovpn_udp/${hostname}.udp.ovpn"
+    if [[ ! -f "$ovpn_file" ]]; then
+        ovpn_file="${OVPN_DIR}/ovpn_tcp/${hostname}.tcp.ovpn"
+        [[ -f "$ovpn_file" ]] || _die "Config file not found for $hostname. Run: nordvpn update-configs"
+    fi
+
+    _get_credentials
+
+    _log "Connecting via OpenVPN..."
+    _save_default_gateway
+
+    # Start OpenVPN via helper (handles daemonization, PID file, permissions)
+    _sudo openvpn-start "$ovpn_file" "$AUTH_FILE"
+
+    _cleanup_auth
+
+    _log "Waiting for connection..."
+    local attempts=0
+    while (( attempts < 30 )); do
+        sleep 1
+        if grep -q "Initialization Sequence Completed" "$LOG_FILE" 2>/dev/null; then
+            _set_vpn_dns
+            _log "Connected ✓"
+            echo ""
+            sleep 2
+            cmd_status
+            return 0
+        fi
+        if grep -q "AUTH_FAILED" "$LOG_FILE" 2>/dev/null; then
+            _sudo openvpn-stop
+            _restore_routes
+            _die "Authentication failed. Check your service credentials in Keychain."
+        fi
+        if grep -q "Connection refused\|RESOLVE.*failed" "$LOG_FILE" 2>/dev/null; then
+            _sudo openvpn-stop
+            _restore_routes
+            _die "Connection failed. Server may be down. Try: nordvpn rotate $country_code"
+        fi
+        (( attempts++ ))
+    done
+
+    _log "Connection timeout — cleaning up..."
+    _sudo openvpn-stop
+    _restore_routes
+    _die "Connection timeout. Check logs: cat $LOG_FILE"
+}
+
+cmd_disconnect() {
+    if ! _is_connected; then
+        local current_gw
+        current_gw=$(/sbin/route -n get default 2>/dev/null | awk '/gateway:/{print $2}') || true
+        if [[ "$current_gw" == 10.* ]]; then
+            _log "Not connected but VPN routes are still active. Cleaning up..."
+            _restore_routes
+            echo ""
+            cmd_status
+            return 0
+        fi
+        _log "Not connected."
+        return 0
+    fi
+
+    local pid
+    pid=$(_sudo check-pid)
+    _log "Disconnecting (PID: $pid)..."
+    _sudo openvpn-stop
+    _restore_routes
+
+    _log "Disconnected ✓"
+    echo ""
+    cmd_status
+}
+
+cmd_rotate() {
+    local country="${1:-}"
+    local city_arg="${2:-}"
+
+    if [[ -z "$country" ]]; then
+        local ip_info
+        ip_info=$(_get_public_ip)
+        local current_country
+        IFS='|' read -r _ _ current_country <<< "$ip_info"
+        country="${current_country:-ES}"
+    fi
+
+    _log "Rotating server (country: $country${city_arg:+, city: $city_arg})..."
+
+    if _is_connected; then
+        cmd_disconnect
+        sleep 2
+    fi
+
+    cmd_connect "$country" "$city_arg"
+}
+
+cmd_cities() {
+    local country="${1:-ES}"
+    local country_info
+    country_info=$(_resolve_country "$country")
+    local country_id country_code country_name
+    IFS='|' read -r country_id country_code country_name <<< "$country_info"
+    echo "Cities in $country_name ($country_code):"
+    _list_cities "$country_code"
+}
+
+cmd_countries() {
+    local countries
+    countries=$(_get_countries_json)
+    echo "$countries" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+data.sort(key=lambda x: x['name'])
+for c in data:
+    cities = ', '.join(ci['name'] for ci in c.get('cities', []))
+    print(f\"  {c['code']:<5} {c['name']:<30} {cities}\")
+"
+}
+
+cmd_ip() {
+    local ip_info
+    ip_info=$(_get_public_ip)
+    local ip city country
+    IFS='|' read -r ip city country <<< "$ip_info"
+
+    if [[ $JSON_OUTPUT -eq 1 ]]; then
+        python3 -c "
+import json
+print(json.dumps({'ip': '${ip}', 'city': '${city}', 'country': '${country}'}, indent=2))
+"
+    else
+        echo "IP:       $ip"
+        echo "Location: $city, $country"
+    fi
+}
+
+cmd_update_configs() {
+    _log "Downloading latest OpenVPN configs from NordVPN..."
+    mkdir -p "$OVPN_DIR"
+    cd "$OVPN_DIR"
+    curl -sfL --progress-bar -o ovpn.zip "https://downloads.nordcdn.com/configs/archives/servers/ovpn.zip" || \
+        _die "Failed to download configs"
+    _log "Extracting..."
+    unzip -q -o ovpn.zip
+    rm ovpn.zip
+    local udp_count tcp_count
+    udp_count=$(find ovpn_udp -name '*.ovpn' 2>/dev/null | wc -l | tr -d ' ')
+    tcp_count=$(find ovpn_tcp -name '*.ovpn' 2>/dev/null | wc -l | tr -d ' ')
+    _log "Updated: $udp_count UDP + $tcp_count TCP server configs ✓"
+}
+
+cmd_fix() {
+    _log "Emergency route repair — killing all OpenVPN processes..."
+    _sudo openvpn-kill-all
+    sleep 1
+    _restore_routes
+    echo ""
+    cmd_status
+}
+
+cmd_help() {
+    cat << 'HELP'
+NordVPN CLI for macOS — because NordVPN forgot to ship one.
+
+Usage: nordvpn <command> [args] [--quiet|-q] [--json]
+
+Commands:
+  status [--json]              Show VPN status + public IP
+  connect [COUNTRY] [CITY]     Connect to best server (default: ES)
+  disconnect                   Disconnect VPN
+  rotate [COUNTRY] [CITY]      Disconnect + reconnect (new server)
+  countries                    List all available countries
+  cities [COUNTRY]             List available cities in a country
+  ip [--json]                  Show current public IP + location
+  update-configs               Re-download all .ovpn server configs (~160MB)
+  fix                          Emergency: kill VPN + restore routes
+  help                         Show this help
+
+Flags:
+  --quiet, -q                  Suppress log output (useful for scripting)
+  --json                       Output JSON (status, ip commands)
+
+Country: 2-letter code (ES, US, GB) or name (Spain, "United States")
+City:    optional name (Barcelona, London, "New York")
+
+Examples:
+  nordvpn connect                    # Connect to Spain (default)
+  nordvpn connect ES Barcelona       # Connect to Barcelona, Spain
+  nordvpn connect US "New York"      # Connect to New York, US
+  nordvpn rotate                     # Rotate to a new server (same country)
+  nordvpn rotate ES Madrid           # Switch to a Madrid server
+  nordvpn rotate GB London           # Switch to London
+  nordvpn cities ES                  # List cities in Spain
+  nordvpn disconnect                 # Disconnect
+  nordvpn status                     # Check connection status
+  nordvpn status --json              # JSON output for scripting
+  nordvpn -q rotate ES               # Rotate silently
+
+Credentials:  macOS Keychain (service: nordvpn-openvpn, account: nordvpn-service)
+Configs:      ~/.nordvpn/ovpn/
+Helper:       ~/.nordvpn/nordvpn-helper (runs via sudoers NOPASSWD)
+Logs:         /tmp/nordvpn-openvpn.log
+HELP
+}
+
+###############################################################################
+# Main — parse global flags, dispatch command
+###############################################################################
+main() {
+    # Parse global flags before the command
+    local args=()
+    for arg in "$@"; do
+        case "$arg" in
+            --quiet|-q) QUIET=1 ;;
+            --json)     JSON_OUTPUT=1 ;;
+            *)          args+=("$arg") ;;
+        esac
+    done
+
+    local cmd="${args[0]:-help}"
+    local rest=("${args[@]:1}")
+
+    case "$cmd" in
+        status|s)          cmd_status "${rest[@]}" ;;
+        connect|c)         cmd_connect "${rest[@]}" ;;
+        disconnect|d)      cmd_disconnect "${rest[@]}" ;;
+        rotate|r)          cmd_rotate "${rest[@]}" ;;
+        countries)         cmd_countries "${rest[@]}" ;;
+        cities)            cmd_cities "${rest[@]}" ;;
+        ip)                cmd_ip "${rest[@]}" ;;
+        update-configs)    cmd_update_configs "${rest[@]}" ;;
+        fix|repair)        cmd_fix "${rest[@]}" ;;
+        help|-h|--help)    cmd_help ;;
+        *)                 _err "Unknown command: $cmd"; cmd_help; exit 1 ;;
+    esac
+}
+
+main "$@"
