@@ -1,15 +1,13 @@
 # nordvpn-cli
 
-> **NordVPN CLI for macOS, Linux & Windows (WSL2) — because NordVPN forgot to ship one.**
+> **NordVPN CLI for macOS — because NordVPN forgot to ship one.**
 
 [![macOS](https://img.shields.io/badge/macOS-12%2B-black?logo=apple&logoColor=white)](https://www.apple.com/macos/)
-[![Linux](https://img.shields.io/badge/Linux-any-FCC624?logo=linux&logoColor=white)](https://www.linux.org/)
-[![Windows](https://img.shields.io/badge/Windows-WSL2-0078D6?logo=windows&logoColor=white)](https://learn.microsoft.com/en-us/windows/wsl/)
 [![Bash](https://img.shields.io/badge/Bash-5%2B-4EAA25?logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/gonzalopezgil/nordvpn-cli/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/gonzalopezgil/nordvpn-cli/actions/workflows/shellcheck.yml)
 
-Connect, disconnect, and rotate NordVPN servers from the terminal — with JSON output, country/city filtering, and auto-rotation built for scraping workflows. Works on **macOS and Linux**.
+Connect, disconnect, and rotate NordVPN servers from the terminal — with JSON output, country/city filtering, and auto-rotation built for scraping workflows. Works on **macOS only**.
 
 ```bash
 $ nordvpn connect ES Barcelona
@@ -38,20 +36,19 @@ $ nordvpn status --json
 
 ## Why this exists
 
-Official NordVPN apps are **GUI-only** and don't support CLI scripting:
+The official NordVPN macOS app is **GUI-only** and doesn't support CLI scripting:
 
-| Feature | NordVPN Linux CLI | NordVPN GUI (macOS/Linux) | nordvpn-cli |
-|---------|---|---|---|
-| Terminal/headless support | ✓ | ✗ | ✓ |
-| Server rotation scripting | ✓ | ✗ | ✓ |
-| JSON output | ✗ | ✗ | ✓ |
-| Country/city filtering | ✓ | ✓ | ✓ |
-| HTTPS proxy URLs (no tunnel) | ✗ | ✗ | ✓ |
-| Open source | ✗ | ✗ | ✓ |
-| macOS support | ✗ | ✓ | ✓ |
-| Works in CI/CD | Limited | ✗ | ✓ |
+| Feature | NordVPN macOS app | nordvpn-cli |
+|---------|---|---|
+| Terminal/headless support | ✗ | ✓ |
+| Server rotation scripting | ✗ | ✓ |
+| JSON output | ✗ | ✓ |
+| Country/city filtering | ✓ | ✓ |
+| HTTPS proxy URLs (no tunnel) | ✗ | ✓ |
+| Open source | ✗ | ✓ |
+| Works in CI/CD | ✗ | ✓ |
 
-This tool fills the gap: **a fully scriptable NordVPN CLI for macOS and Linux, with clean error handling, JSON output, and minimal dependencies.**
+This tool fills the gap: **a fully scriptable NordVPN CLI for macOS, with clean error handling, JSON output, and minimal dependencies.**
 
 ---
 
@@ -70,9 +67,9 @@ cd nordvpn-cli
 ```
 
 The installer:
-1. Checks for macOS/Linux and installs OpenVPN via Homebrew (macOS) or apt/yum/pacman (Linux)
+1. Checks for macOS and installs OpenVPN via Homebrew
 2. Installs `nordvpn` to `/usr/local/bin/`
-3. Installs the privileged helper to `~/.nordvpn/nordvpn-helper`
+3. Installs the privileged helper to `/usr/local/libexec/nordvpn-helper`
 4. Configures sudoers (scoped to helper only, no blanket root access)
 5. Downloads all NordVPN OpenVPN configs (~160MB, one-time)
 6. Prompts for service credentials and stores them securely
@@ -207,19 +204,17 @@ requests.get(url, proxies={'https': proxy_url})
          │               │                      │
     ┌────▼────┐  ┌──────▼──────┐  ┌───────────▼────┐
     │ NordVPN │  │  ipinfo.io  │  │   Credentials  │
-    │   API   │  │  (IP geo)   │  │   (Keychain    │
-    │(public) │  └─────────────┘  │  or ~/.nordvpn/│
-    └────┬────┘                   │ credentials)   │
-         │                        └────────────────┘
+    │   API   │  │  (IP geo)   │  │   (Keychain)  │
+    │(public) │  └─────────────┘  └────────────────┘
+    └────┬────┘
     ┌────▼──────────────────────────────────────────────┐
     │  nordvpn-helper (root via sudoers NOPASSWD)       │
-    │  ~/.nordvpn/nordvpn-helper — scoped to helper only│
+    │  /usr/local/libexec/nordvpn-helper                │
     └────┬──────────────────────────────────────────────┘
          │
     ┌────▼──────────────────────────────────────────────┐
     │             OpenVPN daemon                         │
     │  macOS: /opt/homebrew/opt/openvpn/sbin/openvpn   │
-    │  Linux: /usr/sbin/openvpn (or system default)    │
     │  Config: ~/.nordvpn/ovpn/ovpn_udp/<server>.ovpn  │
     │  → sets routes, tun0 interface, DNS               │
     └────────────────────────────────────────────────────┘
@@ -228,35 +223,21 @@ requests.get(url, proxies={'https': proxy_url})
 **Data flow:**
 1. User runs `nordvpn connect ES`
 2. CLI queries NordVPN API → finds best Spanish OpenVPN server
-3. Reads credentials from macOS Keychain or `~/.nordvpn/credentials`
+3. Reads credentials from macOS Keychain
 4. Calls `sudo -n nordvpn-helper openvpn-start <config> <auth>` via scoped sudoers
 5. Helper daemonizes OpenVPN → VPN tunnel established
-6. CLI sets NordVPN DNS servers via helper (`networksetup` on macOS, `/etc/resolv.conf` on Linux)
+6. CLI sets NordVPN DNS servers via helper (`networksetup`)
 7. Saves original gateway for clean disconnect
 
 ---
 
 ## Requirements
 
-- **macOS** 12+ (Apple Silicon + Intel), **Linux** (any modern distro), or **Windows** (via WSL2)
-- **OpenVPN** — installed via Homebrew (macOS) or apt/yum/pacman (Linux)
-- **Python 3** — included with macOS, available in Linux repos
+- **macOS** 12+ (Apple Silicon + Intel)
+- **OpenVPN** — installed via Homebrew
+- **Python 3** — included with macOS
 - **NordVPN subscription** with service credentials (from dashboard)
 - **Sudo access** (needed for route/DNS management)
-
-### Windows (WSL2)
-
-nordvpn-cli works natively inside WSL2 using the Linux version — no additional porting needed.
-
-```bash
-# Inside WSL2 (Ubuntu, Debian, etc.)
-sudo apt install openvpn curl python3
-curl -fsSL https://raw.githubusercontent.com/gonzalopezgil/nordvpn-cli/main/install.sh | bash
-nordvpn setup
-nordvpn connect US
-```
-
-> **Note:** VPN traffic is routed within the WSL2 VM. The Windows host network is not affected. The `proxy` command works from both WSL2 and native Windows (proxies are just HTTPS URLs).
 
 ---
 
@@ -272,8 +253,7 @@ Get these from the NordVPN dashboard — they're **not** your account password.
 4. Run `nordvpn setup` and paste them when prompted
 
 **Credentials storage:**
-- **macOS:** Encrypted in macOS Keychain (service: `nordvpn-openvpn`, account: `nordvpn-service`)
-- **Linux:** Plaintext file `~/.nordvpn/credentials` with permissions `600` (readable only by owner)
+- Encrypted in macOS Keychain (service: `nordvpn-openvpn`, account: `nordvpn-service`)
 
 To store manually (macOS):
 ```bash
@@ -306,22 +286,21 @@ nordvpn update-configs
 The main `nordvpn` script runs as your normal user. Only **four specific operations** require root:
 
 1. Starting/stopping OpenVPN (needs raw network access)
-2. Setting DNS servers (`networksetup` on macOS, `/etc/resolv.conf` on Linux)
+2. Setting DNS servers (`networksetup`)
 3. Restoring routes after disconnect
 4. Killing stuck OpenVPN processes
 
 These are isolated to `nordvpn-helper`, which runs via a **scoped sudoers entry**:
 
 ```
-username ALL=(root) NOPASSWD: /Users/username/.nordvpn/nordvpn-helper *
+username ALL=(root) NOPASSWD: /usr/local/libexec/nordvpn-helper *
 ```
 
 This grants root access to **that specific script only** — not a blanket `sudo` escalation.
 
 ### Credentials
 
-- **macOS:** Stored in the system Keychain, encrypted at rest
-- **Linux:** Stored in `~/.nordvpn/credentials` with permissions `600` (only owner can read)
+- **Keychain:** Stored in the system Keychain, encrypted at rest
 - **Auth file:** Temporary file (`/tmp/.nordvpn-auth-$$`) created during connect, deleted on exit via `trap`
 - **Proxy command:** Uses environment variables internally but **cleans them up** (`unset _NV_USER _NV_PASS`)
 - **Never logged:** Credentials are never printed to logs or stdout
@@ -350,7 +329,7 @@ grep -r "eval " .
 grep -r "> /etc/sudoers" .
 
 # Run ShellCheck
-shellcheck nordvpn nordvpn-helper install.sh
+shellcheck nordvpn nordvpn-helper install.sh tests/test.sh tests/test_cli.sh
 ```
 
 ---
@@ -360,6 +339,7 @@ shellcheck nordvpn nordvpn-helper install.sh
 Run the test suite:
 
 ```bash
+bash tests/test_cli.sh
 bash tests/test.sh
 ```
 
@@ -391,8 +371,7 @@ nordvpn fix   # Kill VPN + restore original routes
 
 ```bash
 # Check credentials
-security find-generic-password -a nordvpn-service -s nordvpn-openvpn -w  # macOS
-cat ~/.nordvpn/credentials  # Linux
+security find-generic-password -a nordvpn-service -s nordvpn-openvpn -w
 
 # Re-store if wrong
 nordvpn setup   # Re-run setup, or manually:
@@ -418,7 +397,7 @@ tail -f /tmp/nordvpn-openvpn.log
 sudo visudo -c -f /etc/sudoers.d/nordvpn
 
 # Test helper directly
-sudo -n ~/.nordvpn/nordvpn-helper check-pid
+sudo -n /usr/local/libexec/nordvpn-helper check-pid
 
 # If permission denied, reinstall sudoers
 ./install.sh   # Re-run installer, it will update sudoers
@@ -427,7 +406,7 @@ sudo -n ~/.nordvpn/nordvpn-helper check-pid
 ### Check platform support
 
 ```bash
-nordvpn help | head -5   # Shows which OS you're on
+nordvpn help | head -5   # Shows macOS-only help
 ```
 
 ---
@@ -443,7 +422,7 @@ sudo rm /usr/local/bin/nordvpn /etc/sudoers.d/nordvpn
 rm -rf ~/.nordvpn
 
 # Remove stored credentials
-security delete-generic-password -a nordvpn-service -s nordvpn-openvpn  # macOS only
+security delete-generic-password -a nordvpn-service -s nordvpn-openvpn
 ```
 
 ---
@@ -453,8 +432,8 @@ security delete-generic-password -a nordvpn-service -s nordvpn-openvpn  # macOS 
 Contributions welcome! Please:
 
 1. Fork the repo and create a feature branch
-2. Test locally: `bash tests/test.sh`
-3. Run ShellCheck: `shellcheck nordvpn nordvpn-helper install.sh`
+2. Test locally: `bash tests/test_cli.sh`
+3. Run ShellCheck: `shellcheck nordvpn nordvpn-helper install.sh tests/test.sh tests/test_cli.sh`
 4. Keep changes focused — one thing per PR
 5. Update the README if adding commands or changing behavior
 

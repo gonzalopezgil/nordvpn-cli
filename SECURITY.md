@@ -16,37 +16,22 @@ The main `nordvpn` script runs as your normal user. Only **four specific operati
 These are isolated to `nordvpn-helper`, which runs via a **scoped sudoers entry**:
 
 ```
-username ALL=(root) NOPASSWD: /Users/username/.nordvpn/nordvpn-helper *
+username ALL=(root) NOPASSWD: /usr/local/libexec/nordvpn-helper *
 ```
 
 This grants root access to **that specific script only** — not a blanket `sudo` escalation.
 
 ### Credentials
 
-#### macOS
-
 Credentials are stored in **macOS Keychain**:
 
 ```bash
 # Service: nordvpn-openvpn
 # Account: nordvpn-service
-# Format: username:password (URL-encoded password)
+# Format: username:password
 ```
 
 Access requires user interaction (Keychain prompt) unless explicitly configured otherwise.
-
-#### Linux
-
-Credentials are stored in **`~/.nordvpn/credentials`**:
-
-```
-username
-password
-```
-
-File permissions are set to **`600`** (read/write owner only, no group/other access).
-
-**Note:** Linux disk encryption (LUKS) is recommended for production deployments.
 
 ### Auth File Cleanup
 
@@ -58,7 +43,7 @@ The temporary auth file (`/tmp/.nordvpn-auth-$$`) is:
 
 The trap handler ensures cleanup even if the script is interrupted (Ctrl+C, SIGTERM).
 
-### No Credentials in Scripts or Env Vars
+### No Credentials in Scripts or CLI Arguments
 
 - Credentials are **never hardcoded** in scripts
 - They're **never passed as command-line arguments** (visible in `ps`)
@@ -84,8 +69,8 @@ esac
 ### Threat: Credential theft via process listing
 
 **Mitigation:**
-- Credentials stored in Keychain (macOS) or encrypted file (Linux)
-- Never passed as CLI arguments or environment variables
+- Credentials stored in macOS Keychain
+- Never passed as CLI arguments
 - Auth file cleaned up via trap handler
 - Proxy command clears env vars after use
 
@@ -102,7 +87,6 @@ esac
 **Mitigation:**
 - Uses NordVPN's official DNS servers: `103.86.96.100` and `103.86.99.100`
 - DNS settings saved and restored on disconnect
-- Linux: `/etc/resolv.conf` changes are backed up before modification
 
 ### Threat: Route manipulation
 
@@ -147,16 +131,14 @@ grep "_cleanup_auth" nordvpn
 grep "curl" nordvpn nordvpn-helper install.sh | grep "max-time"
 
 # 7. Shellcheck passes
-shellcheck nordvpn nordvpn-helper install.sh
+shellcheck nordvpn nordvpn-helper install.sh tests/test.sh tests/test_cli.sh
 ```
 
 ## Reporting Security Issues
 
-If you find a security vulnerability, please report it to:
+If you find a security vulnerability, use **GitHub private vulnerability reporting** for this repository when it is available.
 
-**gonzalo@example.com** (replace with actual contact)
-
-Please do **not** disclose security issues publicly until a fix is available.
+If private reporting is not enabled, do **not** publish exploit details in a public issue. Share the report privately with the maintainer first, then disclose only after a fix is available.
 
 Include:
 - Description of the vulnerability
@@ -170,7 +152,7 @@ Before deploying nordvpn-cli to production:
 
 1. **Review the helper script** — it runs as root
 2. **Check sudoers entry** — verify it's scoped correctly
-3. **Test credential storage** — ensure Keychain/file permissions are correct
+3. **Test credential storage** — ensure Keychain access works correctly
 4. **Run ShellCheck** — `make shellcheck`
 5. **Review trap handlers** — ensure cleanup runs on exit
 6. **Verify no hardcoded secrets** — `grep -r "password\|token\|api"` (should find none)

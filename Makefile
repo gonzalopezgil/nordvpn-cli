@@ -11,17 +11,18 @@ help:
 	@echo ""
 
 test:
+	bash tests/test_cli.sh
 	bash tests/test.sh
 
 shellcheck:
-	shellcheck nordvpn nordvpn-helper install.sh tests/test.sh
+	shellcheck nordvpn nordvpn-helper install.sh tests/test.sh tests/test_cli.sh
 
 install:
 	bash install.sh
 
 uninstall:
 	bash -c 'nordvpn disconnect 2>/dev/null || true'
-	sudo rm -f /usr/local/bin/nordvpn /etc/sudoers.d/nordvpn
+	sudo rm -f /usr/local/bin/nordvpn /usr/local/libexec/nordvpn-helper /etc/sudoers.d/nordvpn
 	rm -rf ~/.nordvpn
 	security delete-generic-password -a nordvpn-service -s nordvpn-openvpn 2>/dev/null || true
 	@echo "✓ nordvpn-cli uninstalled"

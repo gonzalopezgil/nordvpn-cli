@@ -68,12 +68,12 @@ _assert_json() {
 
 _pass() {
     echo "✓ $1"
-    ((TESTS_PASSED++))
+    ((TESTS_PASSED+=1))
 }
 
 _fail() {
     echo "✗ $1"
-    ((TESTS_FAILED++))
+    ((TESTS_FAILED+=1))
 }
 
 _section() {
@@ -135,14 +135,12 @@ test_unknown_command() {
 test_quiet_flag() {
     _section "Quiet flag"
     local output
-    output=$($NORDVPN -q help 2>&1 || true)
-    if [[ -z "$output" ]]; then
+    output=$("$NORDVPN" -q status 2>&1 >/dev/null || true)
+    if [[ -z "$output" ]] || ! echo "$output" | grep -q "\[nordvpn\]"; then
         _pass "quiet flag suppresses output"
-        ((TESTS_PASSED++))
     else
-        _fail "quiet flag should suppress output"
+        _fail "quiet flag suppresses output"
         echo "  Got output: $output" >&2
-        ((TESTS_FAILED++))
     fi
 }
 

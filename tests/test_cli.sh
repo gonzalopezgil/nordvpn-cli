@@ -5,9 +5,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 NORDVPN="$SCRIPT_DIR/nordvpn"
+HELPER="$SCRIPT_DIR/nordvpn-helper"
+INSTALLER="$SCRIPT_DIR/install.sh"
 PASS=0
 FAIL=0
 SKIP=0
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
 
 # ─── Test helpers ──────────────────────────────────────────────────────────────
 
@@ -19,10 +23,18 @@ assert_exit() {
     local expected="$1" desc="$2"
     shift 2
     if "$@" >/dev/null 2>&1; then
-        [[ "$expected" -eq 0 ]] && _pass "$desc" || _fail "$desc" "expected exit $expected, got 0"
+        if [[ "$expected" -eq 0 ]]; then
+            _pass "$desc"
+        else
+            _fail "$desc" "expected exit $expected, got 0"
+        fi
     else
         local actual=$?
-        [[ "$expected" -ne 0 ]] && _pass "$desc" || _fail "$desc" "expected exit 0, got $actual"
+        if [[ "$expected" -ne 0 ]]; then
+            _pass "$desc"
+        else
+            _fail "$desc" "expected exit 0, got $actual"
+        fi
     fi
 }
 
@@ -51,11 +63,15 @@ assert_json() {
 }
 
 has_credentials() {
-    if [[ "$(uname)" == "Darwin" ]]; then
-        security find-generic-password -a "nordvpn-service" -s "nordvpn-openvpn" -w &>/dev/null
-    else
-        [[ -f "$HOME/.nordvpn/credentials" ]]
-    fi
+    security find-generic-password -a "nordvpn-service" -s "nordvpn-openvpn" -w &>/dev/null
+}
+
+make_fake_uname_path() {
+    local dir="$TMP_DIR/fake-uname"
+    mkdir -p "$dir"
+    printf '#!/usr/bin/env bash\nprintf "FreeBSD\\n"\n' > "$dir/uname"
+    chmod +x "$dir/uname"
+    printf '%s:%s\n' "$dir" "$PATH"
 }
 
 # ─── Tests ─────────────────────────────────────────────────────────────────────
@@ -72,6 +88,16 @@ assert_contains "help shows usage" "Usage:" bash "$NORDVPN" help
 assert_contains "help shows connect" "connect" bash "$NORDVPN" help
 assert_contains "help shows proxy" "proxy" bash "$NORDVPN" help
 assert_exit 1 "unknown command fails" bash "$NORDVPN" nonexistent
+
+echo ""
+echo "## Platform guard"
+FAKE_UNAME_PATH="$(make_fake_uname_path)"
+assert_exit 1 "CLI rejects unsupported OS" env PATH="$FAKE_UNAME_PATH" bash "$NORDVPN" help
+assert_contains "CLI shows macOS-only message" "supports macOS only" env PATH="$FAKE_UNAME_PATH" bash "$NORDVPN" help
+assert_exit 1 "helper rejects unsupported OS" env PATH="$FAKE_UNAME_PATH" bash "$HELPER" check-pid
+assert_contains "helper shows macOS-only message" "supports macOS only" env PATH="$FAKE_UNAME_PATH" bash "$HELPER" check-pid
+assert_exit 1 "installer rejects unsupported OS" env PATH="$FAKE_UNAME_PATH" bash "$INSTALLER"
+assert_contains "installer shows macOS-only message" "supports macOS only" env PATH="$FAKE_UNAME_PATH" bash "$INSTALLER"
 
 echo ""
 echo "## Status (no VPN)"

@@ -9,21 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **Cross-platform support** — Works on both macOS and Linux
-  - macOS: Keychain for credential storage
-  - Linux: `~/.nordvpn/credentials` file with `chmod 600`
-  - Platform detection and abstraction for:
-    - Credential storage
-    - DNS management (networksetup vs /etc/resolv.conf)
-    - Route management (/sbin/route vs ip command)
-    - Network service detection
-    - DNS cache clearing
+- **macOS-only support** — The CLI, helper, installer, docs, and tests now explicitly target macOS.
+  - Keychain for credential storage
+  - Homebrew for OpenVPN installation
+  - `networksetup` for DNS management
+  - `/sbin/route` for route restoration
+  - Fast failure with a clear macOS-only message on unsupported operating systems
 
 - **`nordvpn setup` command** — Interactive setup wizard
   - Prompts for service credentials
   - Downloads OpenVPN configs
   - Optional connection test
-  - Per-platform credential storage
+  - Stores credentials in macOS Keychain
 
 - **Test framework** — `tests/test.sh`
   - Tests for help, status, countries, cities, ip commands
@@ -55,23 +52,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - **Helper script refactored** (`nordvpn-helper`)
-  - Platform detection
-  - Cross-platform DNS management
-  - Cross-platform route management
+  - macOS-only platform detection
+  - macOS DNS management
+  - macOS route management
   - Dynamic OpenVPN binary location
-  - Linux-specific resolv.conf backup/restore
 
 - **Installer refactored** (`install.sh`)
-  - Auto-detects macOS vs Linux
-  - Uses apt/yum/pacman on Linux instead of Homebrew
-  - Stores credentials in Keychain (macOS) or file (Linux)
+  - Requires macOS
+  - Uses Homebrew for OpenVPN
+  - Stores credentials in Keychain
   - Validates Python 3 availability
-  - Linux package manager detection
+  - Installs the privileged helper in `/usr/local/libexec/`
 
 - **README.md** — Major expansion
-  - Added Linux support section
-  - Added Linux badges
-  - Updated architecture diagram (both platforms)
+  - Updated architecture diagram
   - Added "How it works" section
   - Added proxy feature deep-dive
   - Added security section
@@ -79,15 +73,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - Added troubleshooting guide
 
 - **Error messages** — More helpful and platform-aware
-  - Suggest correct commands for the detected OS
-  - DNS setting errors mention platform-specific solutions
+  - Unsupported operating systems receive a clear macOS-only message
+  - DNS setting errors mention macOS recovery commands
 
 ### Fixed
 
-- Platform-specific path detection (macOS vs Linux)
-- DNS query consistency across platforms
+- macOS path detection
+- DNS query consistency
 - Route restoration robustness
-- Credential storage security (chmod 600 on Linux)
+- Credential storage through Keychain only
+- Privileged helper location moved out of the user-writable home directory
+
+### Removed
+
+- Non-macOS install, runtime, documentation, and test paths.
 
 ### Security
 
@@ -144,8 +143,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [ ] Health monitoring (ping/DNS tests)
 - [ ] Homebrew formula
 - [ ] Shell completions (Bash/Zsh/Fish)
-- [ ] Docker image
-- [ ] Windows support (via WSL)
 - [ ] Performance metrics and benchmarks
 - [ ] API library (for use in other scripts)
 

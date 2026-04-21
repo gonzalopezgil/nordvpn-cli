@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# nordvpn — NordVPN CLI for macOS and Linux (OpenVPN)
+# nordvpn — NordVPN CLI for macOS (OpenVPN)
 # shellcheck disable=SC2155
 #
-# Fully non-interactive. Credentials stored in macOS Keychain or ~/.nordvpn/credentials.
+# Fully non-interactive. Credentials stored in macOS Keychain.
 # Privileged ops delegated to nordvpn-helper via sudoers (principle of least privilege).
 #
 # Usage:
@@ -27,7 +27,7 @@ set -euo pipefail
 NORDVPN_API="https://api.nordvpn.com/v1"
 NORDVPN_DATA="${HOME}/.nordvpn"
 OVPN_DIR="${NORDVPN_DATA}/ovpn"
-HELPER="${NORDVPN_HELPER:-${NORDVPN_DATA}/nordvpn-helper}"
+HELPER="${NORDVPN_HELPER:-/usr/local/libexec/nordvpn-helper}"
 PID_FILE="/tmp/nordvpn-openvpn.pid"
 LOG_FILE="/tmp/nordvpn-openvpn.log"
 AUTH_FILE="/tmp/.nordvpn-auth-$$"
@@ -42,7 +42,6 @@ NORDVPN_DNS2="103.86.99.100"
 # Flags
 QUIET=0
 JSON_OUTPUT=0
-OS_TYPE=""
 
 # Run privileged helper
 _sudo() { sudo -n "$HELPER" "$@"; }
@@ -65,126 +64,79 @@ trap '_cleanup_auth; exit 130' INT TERM
 ###############################################################################
 _detect_os() {
     case "$(uname -s)" in
-        Darwin) OS_TYPE="macos" ;;
-        Linux)  OS_TYPE="linux" ;;
-        *) _die "Unsupported OS: $(uname -s). nordvpn supports macOS and Linux." ;;
+        Darwin) ;;
+        *) _die "Unsupported OS: $(uname -s). nordvpn-cli supports macOS only." ;;
     esac
 }
 
 ###############################################################################
-# Platform-specific: file mtime
+# macOS: file mtime
 ###############################################################################
 _file_mtime() {
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        stat -f %m "$1" 2>/dev/null || echo 0
-    else
-        stat -c %Y "$1" 2>/dev/null || echo 0
-    fi
+    stat -f %m "$1" 2>/dev/null || echo 0
 }
 
 ###############################################################################
-# Platform-specific: credentials
+# macOS: credentials
 ###############################################################################
 _get_credentials() {
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        local raw
-        raw=$(security find-generic-password -a "$KEYCHAIN_ACCOUNT" -s "$KEYCHAIN_SERVICE" -w 2>/dev/null) || \
-            _die "Credentials not found in Keychain. Run: nordvpn setup"
-        local user pass
-        user="${raw%%:*}"
-        pass="${raw#*:}"
-        [[ -n "$user" && -n "$pass" ]] || _die "Invalid credentials in Keychain (expected USER:PASS format)"
-        printf '%s\n%s\n' "$user" "$pass" > "$AUTH_FILE"
-    else
-        local creds_file="${NORDVPN_DATA}/credentials"
-        [[ -f "$creds_file" ]] || _die "Credentials not found. Run: nordvpn setup"
-        local user pass
-        user=$(sed -n '1p' "$creds_file")
-        pass=$(sed -n '2p' "$creds_file")
-        [[ -n "$user" && -n "$pass" ]] || \
-            _die "Invalid credentials in $creds_file (expected username on line 1, password on line 2)"
-        printf '%s\n%s\n' "$user" "$pass" > "$AUTH_FILE"
-    fi
+    local raw
+    raw=$(security find-generic-password -a "$KEYCHAIN_ACCOUNT" -s "$KEYCHAIN_SERVICE" -w 2>/dev/null) || \
+        _die "Credentials not found in Keychain. Run: nordvpn setup"
+    local user pass
+    user="${raw%%:*}"
+    pass="${raw#*:}"
+    [[ -n "$user" && -n "$pass" ]] || _die "Invalid credentials in Keychain (expected USER:PASS format)"
+    printf '%s\n%s\n' "$user" "$pass" > "$AUTH_FILE"
     chmod 600 "$AUTH_FILE"
 }
 
 _store_credentials() {
     local username="$1" password="$2"
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        security add-generic-password \
-            -a "$KEYCHAIN_ACCOUNT" \
-            -s "$KEYCHAIN_SERVICE" \
-            -w "${username}:${password}" \
-            -U 2>/dev/null || \
-        security add-generic-password \
-            -a "$KEYCHAIN_ACCOUNT" \
-            -s "$KEYCHAIN_SERVICE" \
-            -w "${username}:${password}" 2>/dev/null || \
-            _die "Failed to store credentials in Keychain."
-        _log "Credentials stored in macOS Keychain ✓"
-    else
-        mkdir -p "$NORDVPN_DATA"
-        chmod 700 "$NORDVPN_DATA"
-        printf '%s\n%s\n' "$username" "$password" > "${NORDVPN_DATA}/credentials"
-        chmod 600 "${NORDVPN_DATA}/credentials"
-        _log "Credentials stored in ${NORDVPN_DATA}/credentials (chmod 600) ✓"
-    fi
+    security add-generic-password \
+        -a "$KEYCHAIN_ACCOUNT" \
+        -s "$KEYCHAIN_SERVICE" \
+        -w "${username}:${password}" \
+        -U 2>/dev/null || \
+    security add-generic-password \
+        -a "$KEYCHAIN_ACCOUNT" \
+        -s "$KEYCHAIN_SERVICE" \
+        -w "${username}:${password}" 2>/dev/null || \
+        _die "Failed to store credentials in Keychain."
+    _log "Credentials stored in macOS Keychain ✓"
 }
 
 # Returns raw credentials as "user:pass" (used by proxy command — never logged)
 _read_raw_credentials() {
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        local raw
-        raw=$(security find-generic-password -a "$KEYCHAIN_ACCOUNT" -s "$KEYCHAIN_SERVICE" -w 2>/dev/null) || \
-            _die "Credentials not found. Run: nordvpn setup"
-        echo "$raw"
-    else
-        local creds_file="${NORDVPN_DATA}/credentials"
-        [[ -f "$creds_file" ]] || _die "Credentials not found. Run: nordvpn setup"
-        local user pass
-        user=$(sed -n '1p' "$creds_file")
-        pass=$(sed -n '2p' "$creds_file")
-        echo "${user}:${pass}"
-    fi
+    local raw
+    raw=$(security find-generic-password -a "$KEYCHAIN_ACCOUNT" -s "$KEYCHAIN_SERVICE" -w 2>/dev/null) || \
+        _die "Credentials not found. Run: nordvpn setup"
+    echo "$raw"
 }
 
 ###############################################################################
-# Platform-specific: network
+# macOS: network
 ###############################################################################
 _get_default_gateway() {
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        /sbin/route -n get default 2>/dev/null | awk '/gateway:/{print $2}' || true
-    else
-        ip route show default 2>/dev/null | awk '/default via/{print $3}' | head -1 || true
-    fi
+    /sbin/route -n get default 2>/dev/null | awk '/gateway:/{print $2}' || true
 }
 
 _get_active_service() {
-    # Returns network service (macOS) or interface name (Linux)
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        local service
-        for service in Wi-Fi Ethernet; do
-            if /usr/sbin/networksetup -getinfo "$service" 2>/dev/null | grep -q "^IP address:"; then
-                echo "$service"
-                return
-            fi
-        done
-        echo "Wi-Fi"
-    else
-        ip route show default 2>/dev/null | awk '{print $5}' | head -1 || echo "eth0"
-    fi
+    local service
+    for service in Wi-Fi Ethernet; do
+        if /usr/sbin/networksetup -getinfo "$service" 2>/dev/null | grep -q "^IP address:"; then
+            echo "$service"
+            return
+        fi
+    done
+    echo "Wi-Fi"
 }
 
 _set_vpn_dns() {
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        local service
-        service=$(_get_active_service)
-        _log "Setting DNS on $service to NordVPN servers..."
-        _sudo set-dns "$service" "$NORDVPN_DNS1" "$NORDVPN_DNS2"
-    else
-        _log "Setting DNS to NordVPN servers..."
-        _sudo set-dns "$NORDVPN_DNS1" "$NORDVPN_DNS2"
-    fi
+    local service
+    service=$(_get_active_service)
+    _log "Setting DNS on $service to NordVPN servers..."
+    _sudo set-dns "$service" "$NORDVPN_DNS1" "$NORDVPN_DNS2"
 }
 
 ###############################################################################
@@ -228,13 +180,9 @@ _restore_routes() {
     fi
 
     if [[ -z "$orig_gw" ]]; then
-        if [[ "$OS_TYPE" == "macos" ]]; then
-            orig_gw=$(/usr/sbin/networksetup -getinfo Wi-Fi 2>/dev/null | awk -F': ' '/^Router:/{print $2}') || true
-            if [[ -z "$orig_gw" ]]; then
-                orig_gw=$(/usr/sbin/networksetup -getinfo "Ethernet" 2>/dev/null | awk -F': ' '/^Router:/{print $2}') || true
-            fi
-        else
-            orig_gw=$(ip route show | grep -v 'tun\|10\.100' | awk '/^default via/{print $3}' | head -1) || true
+        orig_gw=$(/usr/sbin/networksetup -getinfo Wi-Fi 2>/dev/null | awk -F': ' '/^Router:/{print $2}') || true
+        if [[ -z "$orig_gw" ]]; then
+            orig_gw=$(/usr/sbin/networksetup -getinfo "Ethernet" 2>/dev/null | awk -F': ' '/^Router:/{print $2}') || true
         fi
     fi
 
@@ -244,19 +192,11 @@ _restore_routes() {
         _log "Routes restored ✓"
     else
         _err "Could not determine original gateway! You may need to restore manually."
-        if [[ "$OS_TYPE" == "macos" ]]; then
-            _err "  sudo route -n add default <your-router-ip>"
-        else
-            _err "  sudo ip route add default via <your-router-ip>"
-        fi
+        _err "  sudo route -n add default <your-router-ip>"
     fi
 
     # Restore DNS to automatic
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        _sudo clear-dns Wi-Fi Ethernet
-    else
-        _sudo clear-dns
-    fi
+    _sudo clear-dns Wi-Fi Ethernet
 
     rm -f "$GATEWAY_FILE"
 }
@@ -803,7 +743,7 @@ for s in data:
 
 cmd_help() {
     cat << 'HELP'
-NordVPN CLI for macOS and Linux — because the official apps don't support CLI.
+NordVPN CLI for macOS — because the official app doesn't support CLI scripting.
 
 Usage: nordvpn <command> [args] [--quiet|-q] [--json]
 
@@ -845,9 +785,9 @@ Examples:
   nordvpn proxy -n 5                 # Get 5 proxy servers
   nordvpn proxy --urls               # Get full proxy URLs for curl
 
-Credentials:  macOS Keychain (service: nordvpn-openvpn) or ~/.nordvpn/credentials
+Credentials:  macOS Keychain (service: nordvpn-openvpn)
 Configs:      ~/.nordvpn/ovpn/
-Helper:       ~/.nordvpn/nordvpn-helper (runs via sudoers NOPASSWD)
+Helper:       /usr/local/libexec/nordvpn-helper (runs via sudoers NOPASSWD)
 Logs:         /tmp/nordvpn-openvpn.log
 HELP
 }

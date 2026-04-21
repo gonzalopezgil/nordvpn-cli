@@ -16,12 +16,13 @@ git clone https://github.com/gonzalopezgil/nordvpn-cli
 cd nordvpn-cli
 
 # Make scripts executable
-chmod +x nordvpn nordvpn-helper install.sh tests/test.sh
+chmod +x nordvpn nordvpn-helper install.sh tests/test.sh tests/test_cli.sh
 
 # Run shellcheck locally
-shellcheck nordvpn nordvpn-helper install.sh tests/test.sh
+shellcheck nordvpn nordvpn-helper install.sh tests/test.sh tests/test_cli.sh
 
 # Run tests
+bash tests/test_cli.sh
 bash tests/test.sh
 ```
 
@@ -40,9 +41,10 @@ bash tests/test.sh
 
 ```bash
 # Run shellcheck
-shellcheck nordvpn nordvpn-helper
+shellcheck nordvpn nordvpn-helper install.sh tests/test.sh tests/test_cli.sh
 
 # Run tests
+bash tests/test_cli.sh
 bash tests/test.sh
 
 # Test manually
@@ -68,7 +70,7 @@ chore: update dependencies
 Before submitting, ensure:
 
 - [ ] Code passes `shellcheck`
-- [ ] Tests pass: `bash tests/test.sh`
+- [ ] Tests pass: `bash tests/test_cli.sh` and `bash tests/test.sh`
 - [ ] No credentials or secrets in code
 - [ ] No hardcoded paths (use `$NORDVPN_DATA`, etc.)
 - [ ] Commits use conventional message style
@@ -80,7 +82,7 @@ Before submitting, ensure:
 
 ### Why bash?
 
-Bash is universal on macOS and Linux, has no dependencies beyond `/bin/sh`, and OpenVPN expects shell scripts for hooks.
+Bash keeps the project a small macOS CLI with no runtime dependencies beyond standard shell tooling, and OpenVPN expects shell scripts for hooks.
 
 ### Why OpenVPN?
 
@@ -90,9 +92,9 @@ It's free, open source, battle-tested, and NordVPN provides `.ovpn` configs for 
 
 Root access is needed for network operations (OpenVPN, DNS, routes). Sudoers is the standard way to grant this without requiring passwords.
 
-### Why Keychain + file?
+### Why Keychain?
 
-macOS Keychain is secure and encrypted. Linux has no standard equivalent, so we use `~/.nordvpn/credentials` with `chmod 600`.
+macOS Keychain is secure, encrypted, and available on every supported platform for this project.
 
 ## Ideas for contributions
 
@@ -107,7 +109,6 @@ macOS Keychain is secure and encrypted. Linux has no standard equivalent, so we 
 
 ### Infrastructure
 
-- [ ] **Docker image** — for CI/CD use
 - [ ] **GitHub Actions integration** — connection test action
 - [ ] **Performance benchmarks** — track connect time over time
 - [ ] **More tests** — integration tests with real VPN connection
@@ -123,7 +124,7 @@ macOS Keychain is secure and encrypted. Linux has no standard equivalent, so we 
 
 ### When reporting a bug, include:
 
-- **OS and version** (macOS 12.1, Ubuntu 22.04, etc.)
+- **macOS version** (for example, macOS 12.1)
 - **Command** that failed
 - **Error message** and logs (`/tmp/nordvpn-openvpn.log`)
 - **Steps to reproduce**

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — nordvpn-cli installer for macOS and Linux
+# install.sh — nordvpn-cli installer for macOS
 # shellcheck disable=SC2155
 #
 # Usage:
@@ -14,15 +14,13 @@ set -euo pipefail
 ###############################################################################
 NORDVPN_DATA="${HOME}/.nordvpn"
 OVPN_DIR="${NORDVPN_DATA}/ovpn"
-HELPER_PATH="${NORDVPN_DATA}/nordvpn-helper"
+HELPER_PATH="/usr/local/libexec/nordvpn-helper"
 SUDOERS_FILE="/etc/sudoers.d/nordvpn"
 INSTALL_BIN="/usr/local/bin/nordvpn"
 KEYCHAIN_ACCOUNT="nordvpn-service"
 KEYCHAIN_SERVICE="nordvpn-openvpn"
 OVPN_ARCHIVE_URL="https://downloads.nordcdn.com/configs/archives/servers/ovpn.zip"
 REPO_RAW="https://raw.githubusercontent.com/gonzalopezgil/nordvpn-cli/main"
-
-OS_TYPE=""
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -33,16 +31,15 @@ NC='\033[0m'
 
 _detect_os() {
     case "$(uname -s)" in
-        Darwin) OS_TYPE="macos" ;;
-        Linux)  OS_TYPE="linux" ;;
-        *) _fail "Unsupported OS: $(uname -s). nordvpn supports macOS and Linux." ;;
+        Darwin) ;;
+        *) _fail "Unsupported OS: $(uname -s). nordvpn-cli supports macOS only." ;;
     esac
 }
 
 _banner() {
     echo -e "${CYAN}"
     echo "╔═══════════════════════════════════════╗"
-    echo "║  nordvpn-cli installer for $([ "$OS_TYPE" = "macos" ] && echo "macOS" || echo "Linux")   ║"
+    echo "║       nordvpn-cli installer for macOS ║"
     echo "╚═══════════════════════════════════════╝"
     echo -e "${NC}"
 }
@@ -60,15 +57,9 @@ _ask()     { echo -e "  ${CYAN}?${NC}  $*"; }
 check_platform() {
     _step "Checking platform..."
     _detect_os
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        local ver
-        ver=$(sw_vers -productVersion)
-        _ok "macOS $ver"
-    else
-        local ver
-        ver=$(lsb_release -ds 2>/dev/null || echo "Linux")
-        _ok "$ver"
-    fi
+    local ver
+    ver=$(sw_vers -productVersion)
+    _ok "macOS $ver"
 }
 
 check_openvpn() {
@@ -80,23 +71,10 @@ check_openvpn() {
     
     _warn "OpenVPN not found. Installing..."
     
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        if ! command -v brew &>/dev/null; then
-            _fail "Homebrew not found. Install it first: https://brew.sh"
-        fi
-        brew install openvpn
-    else
-        if command -v apt &>/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y openvpn
-        elif command -v yum &>/dev/null; then
-            sudo yum install -y openvpn
-        elif command -v pacman &>/dev/null; then
-            sudo pacman -S --noconfirm openvpn
-        else
-            _fail "Could not detect package manager. Please install openvpn manually."
-        fi
+    if ! command -v brew &>/dev/null; then
+        _fail "Homebrew not found. Install it first: https://brew.sh"
     fi
+    brew install openvpn
     
     _ok "OpenVPN installed ✓"
 }
@@ -126,16 +104,21 @@ install_scripts() {
     if [[ -n "$script_dir" && -f "${script_dir}/nordvpn" ]]; then
         # Install from local clone
         cp "${script_dir}/nordvpn"        "$INSTALL_BIN"
-        cp "${script_dir}/nordvpn-helper" "$HELPER_PATH"
+        sudo mkdir -p "$(dirname "$HELPER_PATH")"
+        sudo install -m 755 "${script_dir}/nordvpn-helper" "$HELPER_PATH"
     else
         # Download from GitHub
         _warn "Downloading scripts from GitHub..."
         curl -fsSL --max-time 30 "${REPO_RAW}/nordvpn"        -o "$INSTALL_BIN"
-        curl -fsSL --max-time 30 "${REPO_RAW}/nordvpn-helper" -o "$HELPER_PATH"
+        local tmp_helper
+        tmp_helper=$(mktemp)
+        curl -fsSL --max-time 30 "${REPO_RAW}/nordvpn-helper" -o "$tmp_helper"
+        sudo mkdir -p "$(dirname "$HELPER_PATH")"
+        sudo install -m 755 "$tmp_helper" "$HELPER_PATH"
+        rm -f "$tmp_helper"
     fi
 
     chmod +x "$INSTALL_BIN"
-    chmod +x "$HELPER_PATH"
     chmod 755 "$NORDVPN_DATA"
 
     _ok "nordvpn → $INSTALL_BIN"
@@ -224,27 +207,17 @@ setup_credentials() {
 
     [[ -n "$username" && -n "$password" ]] || _fail "Username and password are required."
 
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        # Store in Keychain
-        security add-generic-password \
-            -a "$KEYCHAIN_ACCOUNT" \
-            -s "$KEYCHAIN_SERVICE" \
-            -w "${username}:${password}" \
-            -U 2>/dev/null || \
-        security add-generic-password \
-            -a "$KEYCHAIN_ACCOUNT" \
-            -s "$KEYCHAIN_SERVICE" \
-            -w "${username}:${password}" 2>/dev/null || \
-            _fail "Failed to store credentials in Keychain."
-        _ok "Credentials stored in macOS Keychain ✓"
-    else
-        # Store in file with restricted permissions
-        mkdir -p "$NORDVPN_DATA"
-        chmod 700 "$NORDVPN_DATA"
-        printf '%s\n%s\n' "$username" "$password" > "${NORDVPN_DATA}/credentials"
-        chmod 600 "${NORDVPN_DATA}/credentials"
-        _ok "Credentials stored in ${NORDVPN_DATA}/credentials (chmod 600) ✓"
-    fi
+    security add-generic-password \
+        -a "$KEYCHAIN_ACCOUNT" \
+        -s "$KEYCHAIN_SERVICE" \
+        -w "${username}:${password}" \
+        -U 2>/dev/null || \
+    security add-generic-password \
+        -a "$KEYCHAIN_ACCOUNT" \
+        -s "$KEYCHAIN_SERVICE" \
+        -w "${username}:${password}" 2>/dev/null || \
+        _fail "Failed to store credentials in Keychain."
+    _ok "Credentials stored in macOS Keychain ✓"
 }
 
 ###############################################################################
@@ -259,18 +232,10 @@ verify() {
     if [[ -f "$SUDOERS_FILE" ]]; then _ok "Sudoers entry installed"; else _warn "Sudoers entry missing"; fi
     if [[ -d "${OVPN_DIR}/ovpn_udp" ]]; then _ok "OpenVPN configs present"; else _warn "No configs at $OVPN_DIR"; fi
 
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        if security find-generic-password -a "$KEYCHAIN_ACCOUNT" -s "$KEYCHAIN_SERVICE" &>/dev/null; then
-            _ok "Keychain credentials present"
-        else
-            _warn "No credentials in Keychain"
-        fi
+    if security find-generic-password -a "$KEYCHAIN_ACCOUNT" -s "$KEYCHAIN_SERVICE" &>/dev/null; then
+        _ok "Keychain credentials present"
     else
-        if [[ -f "${NORDVPN_DATA}/credentials" ]]; then
-            _ok "Credentials file present"
-        else
-            _warn "No credentials file"
-        fi
+        _warn "No credentials in Keychain"
     fi
 }
 
@@ -294,14 +259,9 @@ print_summary() {
     echo "    cat /tmp/nordvpn-openvpn.log  # View OpenVPN logs"
     echo ""
     echo "  Uninstall:"
-    if [[ "$OS_TYPE" == "macos" ]]; then
-        echo "    sudo rm /usr/local/bin/nordvpn /etc/sudoers.d/nordvpn"
-        echo "    rm -rf ~/.nordvpn"
-        echo "    security delete-generic-password -a nordvpn-service -s nordvpn-openvpn"
-    else
-        echo "    sudo rm /usr/local/bin/nordvpn /etc/sudoers.d/nordvpn"
-        echo "    rm -rf ~/.nordvpn"
-    fi
+    echo "    sudo rm /usr/local/bin/nordvpn /usr/local/libexec/nordvpn-helper /etc/sudoers.d/nordvpn"
+    echo "    rm -rf ~/.nordvpn"
+    echo "    security delete-generic-password -a nordvpn-service -s nordvpn-openvpn"
     echo ""
 }
 
@@ -309,6 +269,7 @@ print_summary() {
 # Main
 ###############################################################################
 main() {
+    _detect_os
     _banner
 
     check_platform
